@@ -1,22 +1,10 @@
-"""Streamlit UI for the CERT-C evaluator."""
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import streamlit as st
 
-from analysis import (
-    _HAS_BERTSCORE,
-    _HAS_SK,
-    _HAS_ST,
-    evaluate_ai_explanation,
-    evaluate_fix,
-    evaluate_issue_match,
-    evaluate_priority,
-    evaluate_severity,
-    supporting_citations,
-    verification,
-)
+from analysis import verification
 from utilities import (
     CERT_C_RULES_PATH,
     COVERITY_EXAMPLES_PATH,
@@ -32,16 +20,11 @@ from utilities import (
 
 __all__ = ["main"]
 
-
 def _apply_example_to_state(example: Dict[str, Any]) -> None:
-    """Populate Streamlit inputs from a saved example payload."""
     coverity = (example.get("coverity") or {}) if isinstance(example, dict) else {}
     ai = (example.get("ai") or {}) if isinstance(example, dict) else {}
 
-    rule_id = coverity.get("rule_id")
-    if rule_id:
-        st.session_state.sel_rule_id = rule_id
-
+    st.session_state.sel_rule_id = coverity.get("rule_id", None) 
     st.session_state.coverity_sev = coverity.get("severity", st.session_state.get("coverity_sev", "Medium"))
     st.session_state.coverity_pri = coverity.get("priority", st.session_state.get("coverity_pri", "P1"))
     st.session_state.issue_text = coverity.get("message", "")
@@ -105,11 +88,9 @@ def _ensure_data_loaded() -> None:
             st.session_state.rubric_error = str(exc)
 
 
-def _render_rubric_panel() -> None:
+def _render_rubric_panel(rubric: Optional[Dict[str, Any]], rubric_error: Optional[str]) -> None:
     with st.expander("Evaluation rubric", expanded=False):
-        rubric = st.session_state.get("rubric")
-        rubric_error = st.session_state.get("rubric_error")
-        if rubric:
+        if isinstance(rubric, dict) and rubric:
             metrics = rubric.get("metrics") or []
             if metrics:
                 st.markdown(_rubric_metrics_table(metrics))
@@ -124,13 +105,6 @@ def _render_rubric_panel() -> None:
             st.error(f"Failed to load rubric from `{RUBRIC_PATH}`.\n\n{rubric_error}")
         else:
             st.info("No rubric available.")
-
-
-def _render_backend_status(container: Any) -> None:
-    backend_box = container.expander("Backends", expanded=False)
-    backend_box.write(f"BERTScore available: `{_HAS_BERTSCORE}`")
-    backend_box.write(f"SentenceTransformers available: `{_HAS_ST}`")
-    backend_box.write(f"scikit-learn TF-IDF available: `{_HAS_SK}`")
 
 
 def _render_example_selector(
@@ -169,7 +143,6 @@ def _render_example_selector(
 
 def _render_sidebar_controls(examples: List[Dict[str, Any]], examples_error: Optional[str]) -> bool:
     controls = st.sidebar.expander("Evaluator Controls", expanded=False)
-    _render_backend_status(controls)
     return _render_example_selector(examples, examples_error, controls)
 
 
@@ -211,14 +184,6 @@ def _render_example_with_code(label: str, section: Dict[str, Any]) -> None:
     code = section.get("code")
     if code:
         st.code(code, language="c")
-
-
-def _render_json_sections(sections: Sequence[Tuple[str, Dict[str, Any]]]) -> None:
-    for title, payload in sections:
-        if not payload:
-            continue
-        st.markdown(f"**{title}**")
-        st.json(payload)
 
 
 def _render_rule_details(rule: Dict[str, Any]) -> None:
@@ -266,27 +231,8 @@ def _render_ai_inputs() -> Tuple[str, str, str, str, str]:
     return ai_sev, ai_pri, ai_expl, ai_fix_text, ai_fix_code
 
 
-def _render_fix_summary(fix_eval: Dict[str, Any]) -> None:
-    col_a, col_b = st.columns(2)
-    with col_a:
-        st.markdown("**Similarity signals**")
-        st.json(fix_eval.get("similarity", {}))
-    with col_b:
-        st.markdown("**Identifier & action coverage**")
-        st.json(fix_eval.get("identifier_analysis", {}))
-    st.markdown("**Overall fix categorization**")
-    category = fix_eval.get("categorization")
-    if category == "OK":
-        st.success(category)
-    elif category == "Partial":
-        st.warning(category)
-    elif category:
-        st.error(category)
-    else:
-        st.info("No categorization computed.")
-
-
 def _render_rubric_evaluation(
+    trigger: bool,
     rubric: Dict[str, Any],
     rule: Dict[str, Any],
     coverity_sev: str,
@@ -300,17 +246,30 @@ def _render_rubric_evaluation(
     ai_fix_code: str,
 ) -> None:
     """Render the rubric-based evaluation using LLM."""
+    if not trigger:
+        return
+    if not isinstance(rubric, dict):
+        st.error(f"Rubric must be a dict, got {type(rubric).__name__}")
+        return
+    if not isinstance(rule, dict):
+        st.error(f"Rule must be a dict, got {type(rule).__name__}")
+        return
+
     with st.expander("Rubric-Based LLM Evaluation", expanded=True):
         st.markdown("### Comprehensive Rubric Evaluation")
-        
+
         # Check if API key is available
         import os
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             st.error("⚠️ Google API Key not found!")
-            st.info("Please create a `.env` file in the project root with your Google API key:\n\n```\nGOOGLE_API_KEY=your_api_key_here\n```\n\nGet your API key from: https://makersuite.google.com/app/apikey")
+            st.info(
+                "Please create a `.env` file in the project root with your Google API key:\n\n"
+                "```\nGOOGLE_API_KEY=your_key_here\n```\n\n"
+                "Or, on Streamlit Cloud, add it to Secrets."
+            )
             return
-        
+
         # Prepare Coverity analysis data
         coverity_analysis = {
             "rule_id": rule.get("rule_id", ""),
@@ -321,119 +280,34 @@ def _render_rubric_evaluation(
             "issue_code": issue_code,
             "rule_description": rule.get("description", ""),
             "risk_assessment": (rule.get("risk_assessment") or {}).get("explanation", ""),
-            "examples": rule.get("examples", [])
+            "examples": rule.get("examples", []),
         }
-        
+
         # Prepare AI analysis data
         ai_analysis = {
             "identified_severity": ai_sev,
             "identified_priority": ai_pri,
             "explanation": ai_expl,
             "fix_description": ai_fix_text,
-            "fix_code": ai_fix_code
+            "fix_code": ai_fix_code,
         }
-        
+
         # Show loading spinner while LLM processes
-        with st.spinner("🤖 Evaluating with LLM using rubric... (This may take up to 60 seconds)"):
+        with st.spinner("🤖 Evaluating with LLM using rubric..."):
             try:
                 evaluation_result = verification(rubric, ai_analysis, coverity_analysis)
-                
+
                 # Display the LLM evaluation result
                 st.markdown("**LLM Evaluation Results:**")
-                
+
                 # Check if the result is an error message
-                if evaluation_result.startswith("Error:"):
+                if isinstance(evaluation_result, str) and evaluation_result.startswith("Error:"):
                     st.error(evaluation_result)
                 else:
                     st.markdown(evaluation_result)
-                
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001
                 st.error(f"Unexpected error during rubric evaluation: {str(e)}")
                 st.info("Please check your internet connection and API key configuration.")
-
-
-def _render_evaluation_results(
-    trigger: bool,
-    rule: Dict[str, Any],
-    coverity_sev: str,
-    coverity_pri: str,
-    issue_text: str,
-    issue_code: str,
-    ai_sev: str,
-    ai_pri: str,
-    ai_expl: str,
-    ai_fix_text: str,
-    ai_fix_code: str,
-) -> None:
-    if not trigger:
-        return
-
-    # First show the rubric-based LLM evaluation
-    rubric = st.session_state.get("rubric")
-    if rubric:
-        _render_rubric_evaluation(
-            rubric,
-            rule,
-            coverity_sev,
-            coverity_pri,
-            issue_text,
-            issue_code,
-            ai_sev,
-            ai_pri,
-            ai_expl,
-            ai_fix_text,
-            ai_fix_code,
-        )
-
-    with st.expander("Detailed Technical Evaluation", expanded=False):
-        gold_metrics = (rule.get("risk_assessment") or {}).get("metrics") or {}
-
-        st.markdown("## 1) Is this really an instance of the rule?")
-        issue_verdict = evaluate_issue_match(issue_text, issue_code, rule)
-        st.json(issue_verdict)
-
-        st.markdown("## 2) Severity & Priority Checks")
-        coverity_vs_gold = evaluate_severity(coverity_sev, gold_metrics)
-        ai_vs_gold = evaluate_severity(ai_sev, gold_metrics)
-        coverity_vs_ai = evaluate_severity(coverity_sev, {"severity": ai_sev})
-        _render_json_sections(
-            [
-                ("Coverity severity vs CERT gold", coverity_vs_gold),
-                ("AI severity vs CERT gold", ai_vs_gold),
-                ("Coverity severity vs AI severity", coverity_vs_ai),
-            ]
-        )
-
-        gold_pri = gold_metrics.get("priority") or ""
-        priority_sections: List[Tuple[str, Dict[str, Any]]] = []
-        if coverity_pri or gold_pri:
-            priority_sections.append(
-                ("Coverity priority vs CERT priority", evaluate_priority(coverity_pri, gold_pri))
-            )
-        if ai_pri or gold_pri:
-            priority_sections.append(
-                ("AI priority vs CERT priority", evaluate_priority(ai_pri, gold_pri))
-            )
-        if coverity_pri or ai_pri:
-            priority_sections.append(
-                ("Coverity priority vs AI priority", evaluate_priority(coverity_pri, ai_pri))
-            )
-        _render_json_sections(priority_sections)
-
-        st.markdown("## 3) AI Explanation Quality")
-        if ai_expl.strip():
-            explanation_eval = evaluate_ai_explanation(ai_expl, rule)
-            st.json(explanation_eval)
-        else:
-            st.info("No AI explanation provided.")
-
-        st.markdown("## 4) AI Fix Quality (text + code)")
-        fix_eval = evaluate_fix(ai_fix_text, ai_fix_code, rule, issue_code=issue_code)
-        _render_fix_summary(fix_eval)
-
-        st.markdown("## 5) Supporting Resources (from CERT)")
-        for citation in supporting_citations(rule):
-            st.markdown(f"- [{citation['title']}]({citation['url']})")
 
 
 def main() -> None:
@@ -442,25 +316,31 @@ def main() -> None:
     _ensure_data_loaded()
 
     st.title("Evaluation of Coverity Findings & AI Fixes")
-    _render_rubric_panel()
 
-    if not st.session_state.rules:
-        rules_error = st.session_state.get("rules_error")
+    # --- Hoist all state here ---
+    rules = st.session_state.get("rules", [])
+    rules_error = st.session_state.get("rules_error")
+    rubric = st.session_state.get("rubric")
+    rubric_error = st.session_state.get("rubric_error")
+    examples = st.session_state.get("examples", [])
+    examples_error = st.session_state.get("examples_error")
+
+    # --- Pass state + error into components ---
+    _render_rubric_panel(rubric, rubric_error)
+
+    if not rules:
         if rules_error:
             st.error(f"Failed to load rules from `{CERT_C_RULES_PATH}`.\n\n{rules_error}")
         else:
             st.info("No CERT-C rules available.")
         st.stop()
 
-    examples_error = st.session_state.get("examples_error")
-
-    run_eval = _render_sidebar_controls(st.session_state.examples, examples_error)
+    run_eval = _render_sidebar_controls(examples, examples_error)
 
     col_left, col_right = st.columns(2)
 
     with col_left:
-        rules = st.session_state.rules
-        rule_labels = [f"{rule.get('rule_id', '—')} — {rule.get('title', '—')}" for rule in rules]
+        rule_labels = [f"{r.get('rule_id', '—')} — {r.get('title', '—')}" for r in rules]
         default_index = 0
         if st.session_state.get("sel_rule_id"):
             matching = [idx for idx, itm in enumerate(rules) if itm.get("rule_id") == st.session_state.sel_rule_id]
@@ -477,18 +357,19 @@ def main() -> None:
     with col_right:
         ai_sev, ai_pri, ai_expl, ai_fix_text, ai_fix_code = _render_ai_inputs()
 
-    _render_evaluation_results(
-        run_eval,
-        rule,
-        coverity_sev,
-        coverity_pri,
-        issue_text,
-        issue_code,
-        ai_sev,
-        ai_pri,
-        ai_expl,
-        ai_fix_text,
-        ai_fix_code,
+    _render_rubric_evaluation(
+        trigger=run_eval,
+        rubric=rubric,
+        rule=rule,
+        coverity_sev=coverity_sev,
+        coverity_pri=coverity_pri,
+        issue_text=issue_text,
+        issue_code=issue_code,
+        ai_sev=ai_sev,
+        ai_pri=ai_pri,
+        ai_expl=ai_expl,
+        ai_fix_text=ai_fix_text,
+        ai_fix_code=ai_fix_code,
     )
 
 
