@@ -64,7 +64,8 @@ typing_extensions
 tzdata
 urllib3
 wheel
-langchain
+langchain==0.0.352
+langchain-core==0.1.0
 langchain-community
 langchain-google-genai
-python-dotenv
+python-dotenv==1.0.0

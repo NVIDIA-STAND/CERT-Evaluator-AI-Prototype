@@ -1,0 +1,2 @@
+{ "impact": "Reliability", "snippet": "FILE *f=fopen(path,\"r\"); if(err)return; fread(buf,1,sz,f);" }
+

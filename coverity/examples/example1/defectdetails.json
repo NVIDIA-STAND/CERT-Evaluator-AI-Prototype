@@ -1,0 +1,7 @@
+{
+  "checkerName": "TAINTED_SCALAR",
+  "message": "Unvalidated input used in arithmetic operation",
+  "filePath": "zlib/inflate.c",
+  "lineNumber": 120
+}
+

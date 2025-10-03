@@ -1,0 +1,2 @@
+{ "checkerName": "RESOURCE_LEAK", "message": "File handle not closed on all paths", "filePath": "zlib/file.c", "lineNumber": 88 }
+
