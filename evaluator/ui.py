@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Tuple
+import json
+import os
 
 import streamlit as st
 
@@ -71,10 +73,15 @@ def _ensure_data_loaded() -> None:
             st.session_state.rules_by_id = {}
             st.session_state.rules_error = str(exc)
 
+    # Legacy examples.json is deprecated. We keep graceful handling in case it exists.
     if "examples" not in st.session_state:
         try:
-            st.session_state.examples = load_examples(COVERITY_EXAMPLES_PATH)
-            st.session_state.examples_error = None
+            if os.path.exists(COVERITY_EXAMPLES_PATH):
+                st.session_state.examples = load_examples(COVERITY_EXAMPLES_PATH)
+                st.session_state.examples_error = None
+            else:
+                st.session_state.examples = []
+                st.session_state.examples_error = None
         except Exception as exc:  # noqa: BLE001
             st.session_state.examples = []
             st.session_state.examples_error = str(exc)
@@ -86,6 +93,131 @@ def _ensure_data_loaded() -> None:
         except Exception as exc:  # noqa: BLE001
             st.session_state.rubric = None
             st.session_state.rubric_error = str(exc)
+
+
+def _safe_decode_uploaded(file_obj: Any) -> str:
+    if not file_obj:
+        return ""
+    try:
+        content = file_obj.read()
+        if isinstance(content, bytes):
+            return content.decode("utf-8", errors="replace")
+        return str(content)
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _find_key_recursive(obj: Any, key: str) -> Optional[Any]:
+    if isinstance(obj, dict):
+        if key in obj:
+            return obj[key]
+        for value in obj.values():
+            found = _find_key_recursive(value, key)
+            if found is not None:
+                return found
+    elif isinstance(obj, list):
+        for item in obj:
+            found = _find_key_recursive(item, key)
+            if found is not None:
+                return found
+    return None
+
+
+def _extract_coverity_values(
+    defectdetails_text: str,
+    defecttriage_text: str,
+    source_text: str,
+) -> Dict[str, Any]:
+    """Parse three Coverity JSON payloads and extract useful fields.
+
+    Expected fields (best-effort, tolerant to schema variations):
+    - checkerName from defectdetails
+    - severity and classification from defecttriage
+    - impact from source
+    - message/description and code snippet when available
+    """
+    def parse_json(text: str) -> Any:
+        try:
+            return json.loads(text) if text and text.strip() else {}
+        except Exception:  # noqa: BLE001
+            return {}
+
+    defectdetails = parse_json(defectdetails_text)
+    defecttriage = parse_json(defecttriage_text)
+    source = parse_json(source_text)
+
+    checker_name = _find_key_recursive(defectdetails, "checkerName") or _find_key_recursive(defectdetails, "checker")
+    severity = _find_key_recursive(defecttriage, "severity") or _find_key_recursive(defecttriage, "impact")
+    classification = _find_key_recursive(defecttriage, "classification") or _find_key_recursive(defecttriage, "classificationName")
+    impact = _find_key_recursive(source, "impact") or _find_key_recursive(defectdetails, "impact")
+
+    # Best-effort messages and code
+    issue_message = _find_key_recursive(defectdetails, "message") or _find_key_recursive(defectdetails, "description")
+    code_snippet = _find_key_recursive(source, "code") or _find_key_recursive(source, "contents") or _find_key_recursive(source, "snippet")
+
+    # Attempt to map severity into known buckets
+    sev_norm = str(severity or "").strip().title()
+    if sev_norm and sev_norm not in SEVERITY_ORDER:
+        # Basic normalization: map e.g. "critical"/"CRITICAL" to title case
+        candidates = {s.lower(): s for s in SEVERITY_ORDER}
+        sev_norm = candidates.get(sev_norm.lower(), "")
+
+    # Attempt to coerce classification to priority if it looks like P#
+    pri_norm = None
+    if isinstance(classification, str) and classification.upper().startswith("P"):
+        upper = classification.upper()
+        if upper in PRIORITY_OPTIONS:
+            pri_norm = upper
+
+    return {
+        "checker_name": checker_name or "",
+        "severity": sev_norm or "",
+        "classification": classification or "",
+        "priority_from_classification": pri_norm or "",
+        "impact": impact or "",
+        "issue_message": (issue_message or "").strip(),
+        "code_snippet": (code_snippet or "").strip(),
+    }
+
+
+def _render_coverity_json_inputs() -> Tuple[str, str, str]:
+    with st.expander("Coverity Finding (Raw JSON)", expanded=False):
+        st.markdown("**Input Coverity JSON Data:**")
+        st.markdown("**Option 1: Upload Files**")
+
+        col_u1, col_u2, col_u3 = st.columns(3)
+        with col_u1:
+            file_defectdetails = st.file_uploader("Upload defectdetails.json", type=["json"], key="file_defectdetails")
+        with col_u2:
+            file_defecttriage = st.file_uploader("Upload defecttriage.json", type=["json"], key="file_defecttriage")
+        with col_u3:
+            file_source = st.file_uploader("Upload source.json (for Impact)", type=["json"], key="file_source")
+
+        st.markdown("**Option 2: Paste JSON Content**")
+        defectdetails_text = st.text_area("defectdetails.json content:", height=160, key="defectdetails_text")
+        defecttriage_text = st.text_area("defecttriage.json content:", height=160, key="defecttriage_text")
+        source_text = st.text_area("source.json content (Required - for Impact):", height=160, key="source_text")
+
+        col_b1, col_b2, col_b3 = st.columns(3)
+        with col_b1:
+            if st.button("📝 Provide defectdetails.json content", key="btn_fill_defectdetails") and file_defectdetails:
+                st.session_state.defectdetails_text = _safe_decode_uploaded(file_defectdetails)
+        with col_b2:
+            if st.button("📝 Provide defecttriage.json content", key="btn_fill_defecttriage") and file_defecttriage:
+                st.session_state.defecttriage_text = _safe_decode_uploaded(file_defecttriage)
+        with col_b3:
+            if st.button("📝 Provide source.json content", key="btn_fill_source") and file_source:
+                st.session_state.source_text = _safe_decode_uploaded(file_source)
+
+        # Quick status note
+        if not (st.session_state.get("defectdetails_text") and st.session_state.get("defecttriage_text") and st.session_state.get("source_text")):
+            st.warning("⏳ Waiting for required files: Please upload all three files (defectdetails.json, defecttriage.json, and source.json) to begin parsing.")
+
+    return (
+        st.session_state.get("defectdetails_text", defectdetails_text),
+        st.session_state.get("defecttriage_text", defecttriage_text),
+        st.session_state.get("source_text", source_text),
+    )
 
 
 def _render_rubric_panel(rubric: Optional[Dict[str, Any]], rubric_error: Optional[str]) -> None:
@@ -141,8 +273,55 @@ def _render_example_selector(
     return container.button("Calculate evaluation", key="calculate_evaluation")
 
 
+def _load_example_triplet(base_dir: str) -> Tuple[str, str, str]:
+    def read(path: str) -> str:
+        try:
+            with open(path, "r", encoding="utf-8") as h:
+                return h.read()
+        except Exception:  # noqa: BLE001
+            return ""
+
+    return (
+        read(os.path.join(base_dir, "defectdetails.json")),
+        read(os.path.join(base_dir, "defecttriage.json")),
+        read(os.path.join(base_dir, "source.json")),
+    )
+
+
 def _render_sidebar_controls(examples: List[Dict[str, Any]], examples_error: Optional[str]) -> bool:
-    controls = st.sidebar.expander("Evaluator Controls", expanded=False)
+    sidebar = st.sidebar
+    sidebar.markdown("### ZLIB Examples")
+    col_e1, col_e2, col_e3 = sidebar.columns(3)
+    example_base = os.getenv("COVERITY_EXAMPLES_BASE", "coverity/examples")
+    loaded_label = None
+    with col_e1:
+        if sidebar.button("Example 1", key="ex1"):
+            dd, dt, src = _load_example_triplet(os.path.join(example_base, "example1"))
+            st.session_state.defectdetails_text = dd
+            st.session_state.defecttriage_text = dt
+            st.session_state.source_text = src
+            loaded_label = "Example 1"
+    with col_e2:
+        if sidebar.button("Example 2", key="ex2"):
+            dd, dt, src = _load_example_triplet(os.path.join(example_base, "example2"))
+            st.session_state.defectdetails_text = dd
+            st.session_state.defecttriage_text = dt
+            st.session_state.source_text = src
+            loaded_label = "Example 2"
+    with col_e3:
+        if sidebar.button("Example 3", key="ex3"):
+            dd, dt, src = _load_example_triplet(os.path.join(example_base, "example3"))
+            st.session_state.defectdetails_text = dd
+            st.session_state.defecttriage_text = dt
+            st.session_state.source_text = src
+            loaded_label = "Example 3"
+
+    with sidebar.expander("Example Data", expanded=False):
+        if loaded_label:
+            st.caption(f"Loaded {loaded_label}")
+        st.caption(f"Base: {example_base}")
+
+    controls = sidebar.expander("Evaluator Controls", expanded=False)
     return _render_example_selector(examples, examples_error, controls)
 
 
@@ -336,6 +515,26 @@ def main() -> None:
         st.stop()
 
     run_eval = _render_sidebar_controls(examples, examples_error)
+
+    # New raw JSON section for Coverity triplet
+    defectdetails_text, defecttriage_text, source_text = _render_coverity_json_inputs()
+
+    # If all three present, auto-fill left-hand Coverity fields from parsed values
+    parsed = None
+    if defectdetails_text and defecttriage_text and source_text:
+        parsed = _extract_coverity_values(defectdetails_text, defecttriage_text, source_text)
+        if parsed:
+            if not st.session_state.get("issue_text") and parsed.get("issue_message"):
+                st.session_state.issue_text = parsed.get("issue_message")
+            if not st.session_state.get("issue_code") and parsed.get("code_snippet"):
+                st.session_state.issue_code = parsed.get("code_snippet")
+            if parsed.get("severity") and parsed.get("severity") in SEVERITY_ORDER:
+                st.session_state.coverity_sev = parsed.get("severity")
+            if parsed.get("priority_from_classification") in PRIORITY_OPTIONS:
+                st.session_state.coverity_pri = parsed.get("priority_from_classification")
+    elif run_eval:
+        st.warning("Please provide all three Coverity JSON files before running evaluation.")
+        run_eval = False
 
     col_left, col_right = st.columns(2)
 

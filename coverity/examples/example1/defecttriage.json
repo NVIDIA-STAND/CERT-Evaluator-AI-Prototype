@@ -1,0 +1,6 @@
+{
+  "severity": "High",
+  "classification": "P3",
+  "note": "Potential integer overflow from tainted input"
+}
+

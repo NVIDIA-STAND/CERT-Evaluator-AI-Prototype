@@ -1,0 +1,2 @@
+{ "impact": "Stability", "snippet": "char buf[16]; strcpy(buf, user_input);" }
+

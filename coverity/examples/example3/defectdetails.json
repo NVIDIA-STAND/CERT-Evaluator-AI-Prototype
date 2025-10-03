@@ -1,0 +1,2 @@
+{ "checkerName": "BUFFER_SIZE", "message": "Potential buffer overflow copying string", "filePath": "zlib/str.c", "lineNumber": 45 }
+

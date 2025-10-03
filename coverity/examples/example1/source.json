@@ -1,0 +1,5 @@
+{
+  "impact": "Security",
+  "snippet": "int len = atoi(argv[1]); char buf[64]; memcpy(buf, input, len);"
+}
+
