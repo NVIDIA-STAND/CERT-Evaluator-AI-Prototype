@@ -1,11 +1,4 @@
 {
-  "name": "cert-c-rag-eval-rubric",
-  "similarity_note": "Prefer LLM embeddings; fall back to BERTScore, SentenceTransformers, TF-IDF, then token overlap.",
-  "definitions": {
-    "SimText(x, y)": "Semantic similarity in [0,1] using LLM embeddings; fallbacks as noted.",
-    "CodeSim(x, Y[])": "Max similarity over Y using char-gram TF-IDF or code embeddings, in [0,1].",
-    "OrdinalDistance(a, b)": "Index distance over ['Low','Medium','High','Critical'] (0..3)."
-  },
   "metrics": [
     {
       "metric": "Compilation Check",
@@ -15,14 +8,14 @@
     },
     {
       "metric": "Tests Check",
-      "description": "All unit/regression/security tests (if provided) must pass.",
+      "description": "All unit/regression/security tests must pass.",
       "evaluation_method": "tests(ai.fix_code) == pass",
       "weight": "Hard 0 if fail"
     },
     {
       "metric": "Static Analyzer Regression Check",
-      "description": "No new issues; original finding resolved when applicable.",
-      "evaluation_method": "coverity(ai.fix_code).new_issues == 0 AND (gold.violation == false OR coverity(ai.fix_code).resolves(rule_id=gold.rule_id) == true)",
+      "description": "Original issue resolved. No new issues produced.",
+      "evaluation_method": "coverity(ai.fix_code).old_issue == pass AND coverity(ai.fix_code).new_issues == 0",
       "weight": "Hard 0 if fail"
     },
     {
@@ -85,9 +78,5 @@
     "evaluation_method": "ReadabilityScore(ai.fix_text) >= threshold",
     "weight": 10
     }
-  ],
-  "notes": {
-    "weights_sum_to": 100,
-    "scoring": "Apply all hard_zero_if_fail gates first; if any gate fails, overall score = 0. Otherwise compute weighted sum over metrics (0–100)."
-  }
+  ]
 }
