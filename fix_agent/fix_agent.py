@@ -90,7 +90,7 @@ def create_agent(mcp_server):
     model_settings = ModelSettings(
         tool_choice="auto",
         temperature=0.0,
-        max_tokens=1200,
+        max_tokens=3600,
         truncation="auto",
         extra_body={"text": {"format": create_response_format()}},
     )
@@ -128,7 +128,9 @@ def build_prompt(
         f"- Propose a minimal, behavior-preserving fix as a unified diff.\n"
         f"- Choose an overall severity (use CSV 'Severity' or 'Impact' as a guide) from: {', '.join(SEVERITY_ORDER)}.\n"
         f"- Choose a priority that matches the urgency from: {', '.join(PRIORITY_OPTIONS)}.\n"
-        f'- Return JSON with keys exactly: "identified_severity", "identified_priority", "explanation", "fix_description", "patch".\n'
+        f'You must return **only** a valid JSON object (no code fences, no prose) '
+        f'with exactly these keys: "identified_severity", "identified_priority", '
+        f'"explanation", "fix_description", "patch".\n'
     )
 
 def get_from_cache(cache_path: str, key: str) -> Optional[AgentFixResult]:

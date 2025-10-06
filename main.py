@@ -42,12 +42,25 @@ def app_state_defaults() -> None:
 
     # Loaded detail objects
     st.session_state.setdefault("certCRule", None)            
-    st.session_state.setdefault("coverity_issue", None)       # CoverityIssue
-    st.session_state.setdefault("agent_fix_result", None)     # AgentFixResult
+    st.session_state.setdefault("coverity_issue", None)       
+    st.session_state.setdefault("agent_fix_result", None)     
 
     # Rubric + last evaluation
     st.session_state.setdefault("rubric", load_rubric())      # Rubric
-    st.session_state.setdefault("rubric_evaluation", None)    # RubricEvaluation
+    st.session_state.setdefault("rubric_evaluation", None)    
+    
+def _on_cid_change():
+    choice = st.session_state.get("ui_cid_choice", "(none)")
+    new_cid = "" if choice == "(none)" else choice
+    update_app_state(selected_coverity_issue_cid=new_cid)
+    st.session_state.pop("ui_rule_choice", None)  
+    st.rerun()
+
+def _on_rule_change():
+    choice = st.session_state.get("ui_rule_choice", "(none)")
+    new_rule = "" if choice == "(none)" else choice
+    update_app_state(selected_cert_rule_id=new_rule)
+
 
 
 def update_app_state(
@@ -127,6 +140,7 @@ def render_sidebar_controls(
             options=cid_options,
             index=cid_index,
             key="ui_cid_choice",
+            on_change=_on_cid_change,
         )
         new_cid = "" if cid_choice == "(none)" else cid_choice
         
@@ -139,6 +153,7 @@ def render_sidebar_controls(
             options=rule_options,
             index=rule_index,
             key="ui_rule_choice",
+            on_change=_on_rule_change,
         )
         new_rule_id = "" if rule_choice == "(none)" else rule_choice
 
